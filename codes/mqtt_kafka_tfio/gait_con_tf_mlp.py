@@ -1,13 +1,38 @@
 import tensorflow as tf
 import tensorflow_io as tfio
+import json
 import numpy as np
 import matplotlib.pyplot as plt
 
 # Kafka Configuration
-KAFKA_TOPIC = "gait-test"
-KAFKA_SERVERS = "localhost:9092"
-GROUP_ID = "cgonline"
-NUM_COLUMNS = 10  # Adjust this based on your dataset's number of features
+bootstrap_servers = "localhost:9092"  # Kafka broker address
+topic_name = "features-topic"  # Kafka topic for features
+group_id = "online-learning-group"  # Kafka consumer group ID
+
+# Temporary Kafka Dataset for determining the number of columns
+sample_ds = tfio.experimental.streaming.KafkaBatchIODataset(
+    topics=[topic_name],
+    group_id="dynamic-column-detector",
+    servers=bootstrap_servers,
+    stream_timeout=1000000,
+    configuration=["auto.offset.reset=earliest"],
+    message_key_dtype=tf.string,
+    message_value_dtype=tf.string,
+    batch_size=1  # Fetch one message to infer schema
+)
+
+# Determine the number of columns
+NUM_COLUMNS = None
+
+for sample in sample_ds.take(1):  # Take the first message
+    raw_message = sample['message'].numpy()[0]  # Extract the raw message
+    data = json.loads(raw_message.decode('utf-8'))  # Parse the JSON message
+    NUM_COLUMNS = len(data) - 1  # Exclude the target column ("Surface_type")
+    print(f"Inferred number of columns (features): {NUM_COLUMNS}")
+    break
+
+if NUM_COLUMNS is None:
+    raise ValueError("Failed to determine the number of columns from Kafka messages.")
 
 # Model Configuration
 BATCH_SIZE = 32
@@ -25,11 +50,11 @@ val_losses = []
 # Counter for processed mini-datasets
 mini_ds_count = 0
 
-# Kafka Dataset
+# Kafka Dataset for Online Learning
 online_train_ds = tfio.experimental.streaming.KafkaBatchIODataset(
-    topics=[KAFKA_TOPIC],
-    group_id=GROUP_ID,
-    servers=KAFKA_SERVERS,
+    topics=[topic_name],
+    group_id=group_id,
+    servers=bootstrap_servers,
     stream_timeout=1000000,
     configuration=[
         "session.timeout.ms=7000",
